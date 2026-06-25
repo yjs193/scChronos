@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scchronos"
+version = "0.1.0"
+description = "Reference-conditioned Transformer modeling for temporal single-cell transcriptomes"
+requires-python = ">=3.10"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scchronos*"]
+

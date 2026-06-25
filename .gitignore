@@ -1,0 +1,16 @@
+Data/
+data/
+runs/
+outputs/
+checkpoints/
+*.pt
+*.pth
+*.npz
+*.h5ad
+*.csv
+!docs/*.csv
+__pycache__/
+*.pyc
+.DS_Store
+.env
+
