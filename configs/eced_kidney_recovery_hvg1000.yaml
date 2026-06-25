@@ -2,7 +2,7 @@ run_name: eced_kidney_recovery_hvg1000
 data_dir: ../Data/mouse/ECED_Kidney/hvg1000
 task: remove_recovery
 vocab_path: ../Data/pretrained/mouse/mouse_gene_vocab.json
-pretrained_path: ../Data/pretrained/mouse/checkpoint-132.pth
+pretrained_path: ../Data/pretrained/mouse/mouse_pretrain_checkpoint-132.pth
 output_dir: runs/eced_kidney_recovery_hvg1000
 seed: 42
 max_genes: 600

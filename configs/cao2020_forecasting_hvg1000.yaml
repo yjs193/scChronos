@@ -2,7 +2,7 @@ run_name: cao2020_forecasting_hvg1000
 data_dir: ../Data/human/Cao2020/hvg1000
 task: two_forecasting
 vocab_path: ../Data/pretrained/human/updated_gene_vocab.json
-pretrained_path: ../Data/pretrained/human/scPISR-pretrain-checkpoint-99.pth
+pretrained_path: ../Data/pretrained/human/human_pretrain_checkpoint-99.pth
 output_dir: runs/cao2020_forecasting_hvg1000
 seed: 42
 max_genes: 600

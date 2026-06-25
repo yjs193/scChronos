@@ -2,7 +2,7 @@ run_name: schiebinger2019_forecasting_hvg1000
 data_dir: ../Data/mouse/Schiebinger2019/hvg1000
 task: three_forecasting
 vocab_path: ../Data/pretrained/mouse/mouse_gene_vocab.json
-pretrained_path: ../Data/pretrained/mouse/checkpoint-132.pth
+pretrained_path: ../Data/pretrained/mouse/mouse_pretrain_checkpoint-132.pth
 output_dir: runs/schiebinger2019_forecasting_hvg1000
 seed: 42
 max_genes: 600
