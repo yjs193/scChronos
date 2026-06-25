@@ -110,26 +110,41 @@ class TemporalFoundationEncoder(nn.Module):
         return torch.cat([cls_feature, gene_feature], dim=-1)
 
 
+def _remap_pretrained_key(key: str) -> str:
+    mapped = key
+    mapped = mapped.replace(".attn.qkv.", ".qkv.")
+    mapped = mapped.replace(".attn.proj.", ".proj.")
+    mapped = mapped.replace(".mlp.fc1.", ".mlp.0.")
+    mapped = mapped.replace(".mlp.fc2.", ".mlp.3.")
+    mapped = mapped.replace("total_counts_embed.", "total_embed.")
+    mapped = mapped.replace("condition_encoder.", "cond.")
+    mapped = mapped.replace("continuous_time_token.", "time_token.")
+    return mapped
+
+
 def load_pretrained_encoder(model: nn.Module, checkpoint_path: str) -> dict[str, int]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     source = checkpoint["model"] if isinstance(checkpoint, dict) and "model" in checkpoint else checkpoint
     target = model.state_dict()
     copied = {}
+    remapped = 0
     skipped = 0
     for key, value in source.items():
-        if key in target and target[key].shape == value.shape:
-            copied[key] = value
-        elif key == "gene_embed.weight" and key in target and target[key].shape[1:] == value.shape[1:]:
-            merged = target[key].clone()
+        mapped_key = _remap_pretrained_key(key)
+        if mapped_key in target and target[mapped_key].shape == value.shape:
+            copied[mapped_key] = value
+            remapped += int(mapped_key != key)
+        elif mapped_key == "gene_embed.weight" and mapped_key in target and target[mapped_key].shape[1:] == value.shape[1:]:
+            merged = target[mapped_key].clone()
             n_copy = min(merged.shape[0], value.shape[0])
             merged[:n_copy] = value[:n_copy]
             if merged.shape[0] > n_copy:
                 start = 1 if value.shape[0] > 1 else 0
                 merged[n_copy:] = value[start:].mean(dim=0, keepdim=True)
-            copied[key] = merged
+            copied[mapped_key] = merged
+            remapped += int(mapped_key != key)
         else:
             skipped += 1
     target.update(copied)
     model.load_state_dict(target, strict=False)
-    return {"copied": len(copied), "skipped": skipped}
-
+    return {"copied": len(copied), "remapped": remapped, "skipped": skipped}

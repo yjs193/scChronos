@@ -4,7 +4,7 @@
 
 ------
 
-## 🌟 Key Innovations
+## Key Innovations
 
 - **Reference-Conditioned Temporal Modeling**
 - **Target-Specific Reference Attention**
@@ -12,7 +12,7 @@
 
 ------
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 scChronos/
@@ -37,7 +37,7 @@ scChronos/
 
 ------
 
-## 📦 Dataset Descriptions
+## Dataset Descriptions
 
 | **Dataset**                    | **Species**            | **Tasks**                                                    | **Description** |
 | -------------------------------| ---------------------- | ------------------------------------------------------------ |  ------------------------------------------------------------ | 
@@ -47,7 +47,7 @@ scChronos/
 | **Cao2020**                    | Human                  | Recovery / Forecasting                           | Human fetal developmental single-cell time-series dataset |
 
 
-## 🚀 Quick Start
+## Quick Start
 ### Installation
 ```
 git clone git@github.com:yjs193/scChronos.git
@@ -64,6 +64,29 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_scchronos.py \
   --config configs/eced_kidney_recovery_hvg1000.yaml \
   --wandb
 ```
+
+The Schiebinger2019 recovery configuration follows the main best-performing
+scChronos setting used in the paper experiments: temporal foundation encoder,
+prototype-based reference context, target-specific reference attention,
+local-global residual fusion, target OT loss, mean/std regularization, context
+reconstruction, and masked cell-level reconstruction.
+
+Expected data layout:
+
+```
+Data/
+├── pretrained/
+│   ├── mouse/mouse_pretrain_checkpoint-132.pth
+│   ├── mouse/mouse_gene_vocab.json
+│   ├── human/human_pretrain_checkpoint-99.pth
+│   └── human/updated_gene_vocab.json
+├── mouse/
+└── human/
+```
+
+The pretrained loader supports the original foundation checkpoint key names
+and the release model key names. Genes absent from the provided vocabulary are
+added during fine-tuning when `extend_vocab: true`.
 
 
 ### Prediction

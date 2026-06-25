@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scchronos.data import day_index, load_temporal_dataset, make_gene_tokens
 from scchronos.evaluate import ot_distance, predict_day
 from scchronos.model import ScChronos
-from scchronos.train_utils import build_eval_batch, save_json, seed_everything
+from scchronos.train_utils import build_day_prototypes, build_eval_batch, save_json, seed_everything
 from scchronos.vocab import extend_vocab_with_genes, load_vocab
 
 
@@ -42,6 +42,9 @@ def main() -> None:
         pad_id = vocab["<pad>"]
         unk_id = vocab["<unk>"]
     tokens = make_gene_tokens(values, data.genes, vocab, pad_id, unk_id, int(cfg.get("max_genes", 600)))[:3]
+    prototypes = None
+    if str(cfg.get("context_source", "cells")) in {"prototypes", "mixed"}:
+        prototypes = build_day_prototypes(values, data.days, int(cfg.get("prototype_count", 256)), int(cfg.get("seed", 42)))
     model = ScChronos(
         vocab_size=len(vocab),
         pad_id=pad_id,
@@ -53,6 +56,11 @@ def main() -> None:
         local_context_k=int(cfg.get("local_context_k", 2)),
         local_strategy=str(cfg.get("local_strategy", "nearest")),
         local_gate_init=float(cfg.get("local_gate_init", 0.5)),
+        fusion_mode=str(cfg.get("fusion_mode", "local_global_residual")),
+        local_residual_scale=float(cfg.get("local_residual_scale", 1.2)),
+        local_residual_max=float(cfg.get("local_residual_max", 2.5)),
+        local_residual_interp_only=bool(cfg.get("local_residual_interp_only", True)),
+        local_residual_input=str(cfg.get("local_residual_input", "local")),
         encode_chunk_size=int(cfg.get("encode_chunk_size", 8)),
         output_activation=str(cfg.get("output_activation", "softplus")),
     ).to(device)
@@ -63,7 +71,7 @@ def main() -> None:
     results = []
     arrays = {}
     for target_day in data.target_days:
-        batch = build_eval_batch(tokens, data.days, cfg["task"], data.train_days, int(target_day), str(cfg.get("context_mode", "bidirectional")), int(cfg.get("context_len", 0)), int(cfg.get("context_cells", 8)), int(cfg.get("eval_repeats", 8)), rng, device)
+        batch = build_eval_batch(tokens, data.days, cfg["task"], data.train_days, int(target_day), str(cfg.get("context_mode", "bidirectional")), int(cfg.get("context_len", 0)), int(cfg.get("context_cells", 8)), int(cfg.get("eval_repeats", 8)), rng, device, prototypes=prototypes, context_source=str(cfg.get("context_source", "cells")))
         pred, attention = predict_day(model, batch)
         target = values[day_to_idx[int(target_day)]]
         metric = ot_distance(pred, target, max_cells=int(cfg.get("eval_max_cells", 512)), seed=int(cfg.get("seed", 42)) + int(target_day))

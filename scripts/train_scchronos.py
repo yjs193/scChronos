@@ -21,7 +21,7 @@ from scchronos.evaluate import ot_distance, predict_day
 from scchronos.foundation import load_pretrained_encoder
 from scchronos.losses import reconstruction_loss, sinkhorn_ot
 from scchronos.model import ScChronos
-from scchronos.train_utils import build_eval_batch, sample_training_batch, save_json, seed_everything
+from scchronos.train_utils import build_day_prototypes, build_eval_batch, sample_training_batch, save_json, seed_everything
 from scchronos.vocab import extend_vocab_with_genes, load_vocab
 
 
@@ -62,6 +62,9 @@ def main() -> None:
     tokens = make_gene_tokens(values, data.genes, vocab, pad_id, unk_id, int(cfg.get("max_genes", 600)))
     token_tensors = tokens[:3]
     save_json({"gene_coverage": tokens[3], "train_days": data.train_days, "target_days": data.target_days, "vocab_size": len(vocab), "pad_id": pad_id, "unk_id": unk_id}, out_dir / "run_metadata.json")
+    prototypes = None
+    if str(cfg.get("context_source", "cells")) in {"prototypes", "mixed"}:
+        prototypes = build_day_prototypes(values, data.days, int(cfg.get("prototype_count", 256)), int(cfg.get("seed", 42)))
 
     model = ScChronos(
         vocab_size=len(vocab),
@@ -74,6 +77,11 @@ def main() -> None:
         local_context_k=int(cfg.get("local_context_k", 2)),
         local_strategy=str(cfg.get("local_strategy", "nearest")),
         local_gate_init=float(cfg.get("local_gate_init", 0.5)),
+        fusion_mode=str(cfg.get("fusion_mode", "local_global_residual")),
+        local_residual_scale=float(cfg.get("local_residual_scale", 1.2)),
+        local_residual_max=float(cfg.get("local_residual_max", 2.5)),
+        local_residual_interp_only=bool(cfg.get("local_residual_interp_only", True)),
+        local_residual_input=str(cfg.get("local_residual_input", "local")),
         encode_chunk_size=int(cfg.get("encode_chunk_size", 8)),
         output_activation=str(cfg.get("output_activation", "softplus")),
     ).to(device)
@@ -110,31 +118,55 @@ def main() -> None:
                 int(cfg.get("batch_size", 1)),
                 rng,
                 device,
+                prototypes=prototypes,
+                context_source=str(cfg.get("context_source", "cells")),
+                target_sampling=str(cfg.get("target_sampling", "uniform")),
             )
-            output = model(batch["context_idx"], batch["context_val"], batch["context_total"], batch["context_days"], batch["target_day"])
+            context_val = batch["context_val"]
+            mask_ratio = float(cfg.get("cell_mask_ratio", 0.0))
+            if mask_ratio > 0:
+                mask = (torch.rand_like(context_val) < mask_ratio) & (context_val > 0)
+                context_val = context_val.masked_fill(mask, 0.0)
+            output = model(batch["context_idx"], context_val, batch["context_total"], batch["context_days"], batch["target_day"])
             pred = output["pred"]
             target = batch["target"]
             ot = sum(sinkhorn_ot(pred[i], target[i], blur=float(cfg.get("sinkhorn_blur", 0.05))) for i in range(pred.shape[0])) / pred.shape[0]
-            recon_weight = float(cfg.get("cell_recon_weight", 0.5))
+            mean_weight = float(cfg.get("mean_weight", 0.0)) if epoch >= int(cfg.get("mean_weight_start_epoch", 1)) else 0.0
+            std_weight = float(cfg.get("std_weight", 0.0))
+            mean_loss = reconstruction_loss(pred.mean(dim=1), target.mean(dim=1))
+            pred_std = pred.std(dim=1).clamp_min(1e-4)
+            target_std = target.std(dim=1).clamp_min(1e-4)
+            std_loss = reconstruction_loss(torch.log1p(pred_std), torch.log1p(target_std))
+            context_recon_weight = float(cfg.get("recon_weight", 0.0))
+            context_target = batch["context_expr"].mean(dim=2)
+            context_recon = reconstruction_loss(output["context_pred"], context_target)
+            cell_recon_weight = float(cfg.get("cell_recon_weight", 0.0))
             cell_recon = output["cell_recon"].reshape(-1, output["cell_recon"].shape[-1])
-            context_expr = []
-            for row in range(batch["context_days"].shape[0]):
-                for day in batch["context_days"][row].long().cpu().numpy().tolist():
-                    idx = day_to_idx[int(day)]
-                    selected = idx[: min(len(idx), int(cfg.get("context_cells", 8)))]
-                    context_expr.append(torch.from_numpy(values[selected].astype(np.float32)).to(device))
-            recon_target = torch.cat(context_expr, dim=0)
-            recon_target = recon_target[: cell_recon.shape[0]]
-            loss = ot + recon_weight * reconstruction_loss(cell_recon[: recon_target.shape[0]], recon_target)
+            recon_target = batch["context_expr"].reshape(-1, batch["context_expr"].shape[-1])
+            cell_recon_loss = reconstruction_loss(cell_recon[: recon_target.shape[0]], recon_target)
+            loss = ot + mean_weight * mean_loss + std_weight * std_loss + context_recon_weight * context_recon + cell_recon_weight * cell_recon_loss
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), float(cfg.get("grad_clip", 1.0)))
             optimizer.step()
             losses.append(float(loss.detach().cpu()))
+            if run is not None:
+                step = (epoch - 1) * int(cfg.get("steps_per_epoch", 100)) + len(losses)
+                wandb.log(
+                    {
+                        "train/loss": float(loss.detach().cpu()),
+                        "train/ot": float(ot.detach().cpu()),
+                        "train/mean_loss": float(mean_loss.detach().cpu()),
+                        "train/std_loss": float(std_loss.detach().cpu()),
+                        "train/context_recon": float(context_recon.detach().cpu()),
+                        "train/cell_recon": float(cell_recon_loss.detach().cpu()),
+                    },
+                    step=step,
+                )
 
         eval_rows = []
         for target_day in data.target_days:
-            eval_batch = build_eval_batch(token_tensors, data.days, cfg["task"], data.train_days, int(target_day), str(cfg.get("context_mode", "bidirectional")), int(cfg.get("context_len", 0)), int(cfg.get("context_cells", 8)), int(cfg.get("eval_repeats", 4)), rng, device)
+            eval_batch = build_eval_batch(token_tensors, data.days, cfg["task"], data.train_days, int(target_day), str(cfg.get("context_mode", "bidirectional")), int(cfg.get("context_len", 0)), int(cfg.get("context_cells", 8)), int(cfg.get("eval_repeats", 4)), rng, device, prototypes=prototypes, context_source=str(cfg.get("context_source", "cells")))
             pred, attention = predict_day(model, eval_batch)
             target = values[day_to_idx[int(target_day)]]
             metric = ot_distance(pred, target, max_cells=int(cfg.get("eval_max_cells", 512)), seed=int(cfg.get("seed", 42)) + epoch + int(target_day))

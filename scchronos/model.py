@@ -21,6 +21,11 @@ class ScChronos(nn.Module):
         local_context_k: int = 2,
         local_strategy: str = "nearest",
         local_gate_init: float = 0.5,
+        fusion_mode: str = "local_global_residual",
+        local_residual_scale: float = 1.2,
+        local_residual_max: float = 2.5,
+        local_residual_interp_only: bool = True,
+        local_residual_input: str = "local",
         dropout: float = 0.05,
         encode_chunk_size: int = 8,
         output_activation: str = "softplus",
@@ -35,6 +40,11 @@ class ScChronos(nn.Module):
         self.day_slots = int(max(1, day_slots))
         self.local_context_k = int(max(1, local_context_k))
         self.local_strategy = str(local_strategy)
+        self.fusion_mode = str(fusion_mode)
+        self.local_residual_scale = float(local_residual_scale)
+        self.local_residual_max = float(local_residual_max)
+        self.local_residual_interp_only = bool(local_residual_interp_only)
+        self.local_residual_input = str(local_residual_input)
         self.output_activation = str(output_activation)
         enc_dim = self.encoder.output_dim
         time_dim = 3 * (2 * 8 + 1)
@@ -111,6 +121,11 @@ class ScChronos(nn.Module):
             mask[row, selected] = True
         return mask
 
+    def interpolation_mask(self, context_days: torch.Tensor, target_day: torch.Tensor) -> torch.Tensor:
+        left = (context_days < target_day[:, None]).any(dim=1)
+        right = (context_days > target_day[:, None]).any(dim=1)
+        return (left & right).float()
+
     def decode_activation(self, logits: torch.Tensor) -> torch.Tensor:
         if self.output_activation == "relu":
             return F.relu(logits)
@@ -133,7 +148,12 @@ class ScChronos(nn.Module):
         local_context = torch.einsum("bt,btd->bd", masked_attn, values)
         gate_input = torch.cat([global_context, local_context, time_features(target_day, target_day)], dim=-1)
         gate = torch.sigmoid(self.local_global_gate(gate_input))
-        context = gate * local_context + (1.0 - gate) * global_context
+        if self.fusion_mode == "global":
+            context = global_context
+        elif self.fusion_mode == "local":
+            context = local_context
+        else:
+            context = gate * local_context + (1.0 - gate) * global_context
         target_hidden = self.target_fuse(torch.cat([context, query], dim=-1))
         outputs = []
         for group in range(self.query_groups):
@@ -146,11 +166,20 @@ class ScChronos(nn.Module):
             outputs.append(fused)
         cell_hidden = torch.cat(outputs, dim=1)
         global_pred = self.decoder(torch.cat([cell_hidden, target_hidden.unsqueeze(1).expand_as(cell_hidden)], dim=-1))
-        local_pred = self.local_residual(torch.cat([cell_hidden, local_context.unsqueeze(1).expand_as(cell_hidden)], dim=-1))
-        pred = self.decode_activation(global_pred + local_pred)
+        if self.fusion_mode == "local_global_residual":
+            residual_context = local_context if self.local_residual_input == "local" else context
+            local_pred = self.local_residual(torch.cat([cell_hidden, residual_context.unsqueeze(1).expand_as(cell_hidden)], dim=-1))
+            if self.local_residual_max > 0:
+                local_pred = self.local_residual_max * torch.tanh(local_pred / self.local_residual_max)
+            if self.local_residual_interp_only:
+                active = self.interpolation_mask(context_days, target_day).view(bsz, 1, 1)
+                local_pred = local_pred * active
+            pred_logits = global_pred + self.local_residual_scale * local_pred
+        else:
+            pred_logits = global_pred
+        pred = self.decode_activation(pred_logits)
         context_pred = self.decode_activation(self.recon_decoder(torch.cat([day_hidden, context.unsqueeze(1).expand_as(day_hidden)], dim=-1)))
         cell_recon = self.decode_activation(self.cell_decoder(cell_latent))
         mean_delta = self.mean_corrector(torch.cat([target_hidden, time_features(target_day, target_day)], dim=-1))
         pred = pred + torch.tanh(mean_delta).unsqueeze(1)
         return {"pred": pred.clamp_min(0.0), "context_pred": context_pred, "cell_recon": cell_recon, "attention": attn, "local_gate": gate.squeeze(-1)}
-
