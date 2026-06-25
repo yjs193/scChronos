@@ -24,6 +24,8 @@ def load_temporal_dataset(data_dir: str | Path, task: str) -> TemporalDataset:
     metadata = pd.read_csv(data_dir / f"{task}-meta_data.csv", index_col=0).loc[expression.index]
     var_path = data_dir / f"{task}-var_genes_list.csv"
     genes = pd.read_csv(var_path, header=None).iloc[:, 0].astype(str).tolist() if var_path.exists() else list(map(str, expression.columns))
+    if len(genes) != expression.shape[1]:
+        genes = list(map(str, expression.columns))
     days = metadata["day"].to_numpy(np.int64)
     train_days, target_days = split_days(days, task)
     return TemporalDataset(expression, metadata, genes, days, train_days, target_days)
@@ -115,4 +117,3 @@ def sample_cells(indices: np.ndarray, n_cells: int, rng: np.random.Generator) ->
     if len(indices) <= n_cells:
         return indices
     return rng.choice(indices, size=n_cells, replace=False)
-
