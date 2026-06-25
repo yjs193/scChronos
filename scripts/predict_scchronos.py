@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scchronos.data import day_index, load_temporal_dataset, make_gene_tokens
 from scchronos.evaluate import ot_distance, predict_day
