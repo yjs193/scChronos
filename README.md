@@ -94,7 +94,8 @@ added during fine-tuning when `extend_vocab: true`.
 ```
 CUDA_VISIBLE_DEVICES=0 python scripts/predict_scchronos.py \
   --config configs/schiebinger2019_recovery_hvg1000.yaml \
-  --checkpoint runs/schiebinger2019_recovery_hvg1000/xxx.pt \
+  --checkpoint "" \
+  --output-dir ""
 ```
 
 ### 📧 Contact

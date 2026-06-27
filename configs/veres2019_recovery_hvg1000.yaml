@@ -1,9 +1,9 @@
 run_name: veres2019_recovery_hvg1000
-data_dir: ../Data/human/Veres2019/hvg1000
+data_dir: ""
 task: remove_recovery
-vocab_path: ../Data/pretrained/human/updated_gene_vocab.json
-pretrained_path: ../Data/pretrained/human/human_pretrain_checkpoint-99.pth
-output_dir: runs/veres2019_recovery_hvg1000
+vocab_path: ""
+pretrained_path: ""
+output_dir: ""
 seed: 42
 max_genes: 600
 extend_vocab: true
@@ -28,4 +28,3 @@ cell_recon_weight: 0.5
 eval_repeats: 8
 eval_max_cells: 512
 wandb_project: scChronos
-
