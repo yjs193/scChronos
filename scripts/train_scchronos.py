@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scchronos.data import day_index, load_temporal_dataset, make_gene_tokens
 from scchronos.evaluate import evaluate_model
 from scchronos.foundation import load_pretrained_encoder
-from scchronos.losses import temporal_loss, weighted_moment_losses, weighted_ot
+from scchronos.losses import weighted_moment_losses, weighted_ot
 from scchronos.model import ScChronos, load_model_state_flexible
 from scchronos.train_utils import build_day_prototypes, build_vocab_to_column, pad_weighted_proto, sample_episode, save_json, seed_everything
 from scchronos.vocab import extend_vocab_with_genes, load_vocab
@@ -206,11 +206,10 @@ def main() -> None:
         target_losses = []
         mean_losses = []
         std_losses = []
-        temporal_losses = []
         recon_ref = None
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
             for i, target_day in enumerate(batch["target_day"]):
-                pred, recon, z, day_hidden, _day_weights, _cell_weights, cell_latent = model(
+                pred, recon, _z, _day_hidden, _day_weights, _cell_weights, cell_latent = model(
                     batch["context_idx"],
                     context_val_model,
                     batch["context_total"],
@@ -222,13 +221,11 @@ def main() -> None:
                 target_losses.append(weighted_ot(pred[0], batch["target_expr"][i], batch["target_weight"][i], float(cfg.get("sinkhorn_blur", 0.05))))
                 mean_losses.append(mean_loss)
                 std_losses.append(std_loss)
-                temporal_losses.append(temporal_loss(z, day_hidden, batch["context_days"], target_day.reshape(1)))
                 if recon_ref is None:
                     recon_ref = recon
             loss_target = torch.stack(target_losses).mean()
             loss_mean = torch.stack(mean_losses).mean()
             loss_std = torch.stack(std_losses).mean()
-            loss_temporal = torch.stack(temporal_losses).mean()
             recon_terms = []
             if float(cfg.get("recon_weight", 0.0)) != 0:
                 day_to_idx = day_index(data.days)
@@ -251,7 +248,6 @@ def main() -> None:
                 + mean_weight * loss_mean
                 + float(cfg.get("std_weight", 0.0)) * loss_std
                 + float(cfg.get("recon_weight", 0.0)) * loss_recon
-                + float(cfg.get("temporal_weight", 0.0)) * loss_temporal
                 + float(cfg.get("cell_recon_weight", 0.0)) * loss_cell_recon
             )
         scaler.scale(loss).backward()
@@ -268,7 +264,6 @@ def main() -> None:
                 "target_mean": float(loss_mean.detach().cpu()),
                 "target_std": float(loss_std.detach().cpu()),
                 "recon_ot": float(loss_recon.detach().cpu()),
-                "temporal": float(loss_temporal.detach().cpu()),
                 "cell_recon": float(loss_cell_recon.detach().cpu()),
                 "cell_mask_fraction": float(cell_mask_fraction.detach().cpu()),
             }
