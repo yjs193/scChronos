@@ -97,7 +97,3 @@ CUDA_VISIBLE_DEVICES=0 python scripts/predict_scchronos.py \
   --checkpoint "" \
   --output-dir ""
 ```
-
-### 📧 Contact
-
-For questions, please contact J. Yao (csyjs@mail.scut.edu.cn)

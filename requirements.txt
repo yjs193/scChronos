@@ -1,14 +1,8 @@
-anndata
 geomloss
-matplotlib
 numpy
 pandas
 pyyaml
-scanpy
 scikit-learn
 scipy
-seaborn
 torch>=2.0
-umap-learn
 wandb
-
