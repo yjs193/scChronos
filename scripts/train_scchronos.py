@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scchronos.data import day_index, load_temporal_dataset, make_gene_tokens
 from scchronos.evaluate import evaluate_model
 from scchronos.foundation import load_pretrained_encoder
-from scchronos.losses import weighted_moment_losses, weighted_ot
+from scchronos.losses import weighted_ot, weighted_snapshot_stat_loss
 from scchronos.model import ScChronos, load_model_state_flexible
 from scchronos.train_utils import build_day_prototypes, build_vocab_to_column, pad_weighted_proto, sample_episode, save_json, seed_everything
 from scchronos.vocab import extend_vocab_with_genes, load_vocab
@@ -159,7 +159,6 @@ def main() -> None:
     steps_per_epoch = int(cfg.get("steps_per_epoch", max(1, len(data.train_days))))
     warmup_steps = int(round(float(cfg.get("warmup_epochs", 0.0)) * float(steps_per_epoch)))
     min_lr = float(cfg.get("min_lr", cfg.get("lr", 2e-5)))
-    mean_start_step = int(round(float(cfg.get("mean_weight_start_epoch", 0.0)) * float(steps_per_epoch)))
     eval_every = int(cfg.get("eval_every", steps_per_epoch))
     patience = int(cfg.get("early_stop_patience", cfg.get("patience", 0)))
     early_min_step = int(cfg.get("early_stop_min_step", 0))
@@ -204,8 +203,6 @@ def main() -> None:
 
         optimizer.zero_grad(set_to_none=True)
         target_losses = []
-        mean_losses = []
-        std_losses = []
         recon_ref = None
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
             for i, target_day in enumerate(batch["target_day"]):
@@ -217,15 +214,10 @@ def main() -> None:
                     target_day.reshape(1),
                     mean_correction_scale=float(cfg.get("mean_correction_scale", 0.0)),
                 )
-                mean_loss, std_loss = weighted_moment_losses(pred[0], batch["target_expr"][i], batch["target_weight"][i])
                 target_losses.append(weighted_ot(pred[0], batch["target_expr"][i], batch["target_weight"][i], float(cfg.get("sinkhorn_blur", 0.05))))
-                mean_losses.append(mean_loss)
-                std_losses.append(std_loss)
                 if recon_ref is None:
                     recon_ref = recon
             loss_target = torch.stack(target_losses).mean()
-            loss_mean = torch.stack(mean_losses).mean()
-            loss_std = torch.stack(std_losses).mean()
             recon_terms = []
             if float(cfg.get("recon_weight", 0.0)) != 0:
                 day_to_idx = day_index(data.days)
@@ -239,14 +231,11 @@ def main() -> None:
                         weight_np = np.full(expr_np.shape[0], 1.0 / expr_np.shape[0], dtype=np.float32)
                     expr_t = torch.from_numpy(expr_np).float().to(device)
                     weight_t = torch.from_numpy(weight_np).float().to(device)
-                    recon_terms.append(weighted_ot(recon_ref[0, j], expr_t, weight_t, float(cfg.get("sinkhorn_blur", 0.05))))
+                    recon_terms.append(weighted_snapshot_stat_loss(recon_ref[0, j], expr_t, weight_t))
             loss_recon = torch.stack(recon_terms).mean() if recon_terms else loss_target * 0.0
             loss_cell_recon, cell_mask_fraction = model.reconstruct_masked_cells_from_latent(cell_latent, batch["context_idx"], batch["context_val"], vocab_to_column, pad_id, cell_mask)
-            mean_weight = float(cfg.get("mean_weight", 0.0)) if step > mean_start_step else 0.0
             loss = (
                 float(cfg.get("target_weight", 1.0)) * loss_target
-                + mean_weight * loss_mean
-                + float(cfg.get("std_weight", 0.0)) * loss_std
                 + float(cfg.get("recon_weight", 0.0)) * loss_recon
                 + float(cfg.get("cell_recon_weight", 0.0)) * loss_cell_recon
             )
@@ -261,9 +250,7 @@ def main() -> None:
                 "step": step,
                 "loss": float(loss.detach().cpu()),
                 "target_ot": float(loss_target.detach().cpu()),
-                "target_mean": float(loss_mean.detach().cpu()),
-                "target_std": float(loss_std.detach().cpu()),
-                "recon_ot": float(loss_recon.detach().cpu()),
+                "snap_stat": float(loss_recon.detach().cpu()),
                 "cell_recon": float(loss_cell_recon.detach().cpu()),
                 "cell_mask_fraction": float(cell_mask_fraction.detach().cpu()),
             }

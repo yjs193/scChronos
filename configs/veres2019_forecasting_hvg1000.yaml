@@ -43,11 +43,8 @@ train_target_cells: 0
 target_source: cells
 target_sampling: late
 context_source: prototypes
-recon_source: cells
+recon_source: prototypes
 prototype_count: 256
-mean_weight: 0.02
-mean_weight_start_epoch: 1.0
-std_weight: 0.005
 recon_weight: 0.5
 cell_recon_weight: 0.12
 cell_mask_ratio: 0.6

@@ -18,12 +18,12 @@ def weighted_ot(pred: torch.Tensor, target: torch.Tensor, target_weight: torch.T
     return solver(pred_weight.double(), pred.double(), target_weight.double(), target.double()).float()
 
 
-def weighted_moment_losses(pred: torch.Tensor, target: torch.Tensor, target_weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def weighted_snapshot_stat_loss(pred: torch.Tensor, target: torch.Tensor, target_weight: torch.Tensor) -> torch.Tensor:
     target_weight = target_weight / target_weight.sum().clamp_min(1e-8)
     pred_mean = pred.mean(dim=0)
     target_mean = (target * target_weight[:, None]).sum(dim=0)
-    mean_loss = F.mse_loss(pred_mean, target_mean) * pred.shape[1]
     pred_var = (pred - pred_mean[None, :]).square().mean(dim=0)
     target_var = ((target - target_mean[None, :]).square() * target_weight[:, None]).sum(dim=0)
-    std_loss = F.mse_loss(torch.sqrt(pred_var + 1e-4), torch.sqrt(target_var + 1e-4)) * pred.shape[1]
-    return mean_loss, std_loss
+    mean_loss = F.mse_loss(pred_mean, target_mean)
+    std_loss = F.mse_loss(torch.sqrt(pred_var + 1e-4), torch.sqrt(target_var + 1e-4))
+    return (mean_loss + std_loss) * pred.shape[1]

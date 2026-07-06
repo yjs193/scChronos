@@ -68,7 +68,7 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_scchronos.py \
 The Schiebinger2019 recovery configuration follows the main best-performing
 scChronos setting used in the paper experiments: temporal foundation encoder,
 prototype-based reference context, target-specific reference attention,
-local-global residual fusion, target OT loss, mean/std regularization, context
+local-global residual fusion, target OT loss, prototype snapshot-level
 reconstruction, and masked cell-level reconstruction.
 
 Expected data layout:

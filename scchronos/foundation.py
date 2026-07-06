@@ -64,12 +64,12 @@ class TemporalFoundationEncoder(nn.Module):
         depth: int = 12,
         heads: int = 8,
         cond_dim: int = 128,
-        prompts: int = 4,
+        condition_tokens: int = 4,
         dropout: float = 0.05,
     ):
         super().__init__()
         self.padding_idx = int(padding_idx)
-        self.prompts = int(prompts)
+        self.condition_token_count = int(condition_tokens)
         self.gene_embed = nn.Embedding(vocab_size, embed_dim, padding_idx=padding_idx)
         self.value_embed = nn.Linear(1, embed_dim)
         self.total_embed = nn.Linear(1, embed_dim)
@@ -81,7 +81,11 @@ class TemporalFoundationEncoder(nn.Module):
         time_dim = 3 * (2 * 8 + 1)
         self.cond = nn.Sequential(nn.Linear(time_dim, cond_dim), nn.GELU(), nn.Linear(cond_dim, cond_dim), nn.LayerNorm(cond_dim))
         self.time_token = nn.Sequential(nn.Linear(time_dim, embed_dim), nn.GELU(), nn.Linear(embed_dim, embed_dim), nn.LayerNorm(embed_dim))
-        self.prompt = nn.Sequential(nn.Linear(cond_dim, cond_dim), nn.GELU(), nn.Linear(cond_dim, prompts * embed_dim)) if prompts > 0 else None
+        self.condition_token_mlp = (
+            nn.Sequential(nn.Linear(cond_dim, cond_dim), nn.GELU(), nn.Linear(cond_dim, self.condition_token_count * embed_dim))
+            if self.condition_token_count > 0
+            else None
+        )
 
     def forward(self, gene_idx: torch.Tensor, gene_val: torch.Tensor, total: torch.Tensor, source_day: torch.Tensor, target_day: torch.Tensor) -> torch.Tensor:
         if total.ndim == 2:
@@ -93,8 +97,8 @@ class TemporalFoundationEncoder(nn.Module):
         cls = cls.expand(gene_idx.shape[0], -1, -1)
         time_token = self.time_token(tf).unsqueeze(1)
         parts = [cls, time_token]
-        if self.prompt is not None:
-            parts.append(self.prompt(cond).reshape(gene_idx.shape[0], self.prompts, gene_tokens.shape[-1]))
+        if self.condition_token_mlp is not None:
+            parts.append(self.condition_token_mlp(cond).reshape(gene_idx.shape[0], self.condition_token_count, gene_tokens.shape[-1]))
         parts.append(gene_tokens)
         x = torch.cat(parts, dim=1)
         valid = gene_idx != self.padding_idx
