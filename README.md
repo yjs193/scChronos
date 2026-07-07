@@ -1,14 +1,14 @@
 # scChronos: Hierarchical Temporal Context Learning for Missing Snapshot Prediction in Single-Cell Time Series
 
-**scChronos** is a reference-conditioned Transformer framework for temporal single-cell transcriptome recovery and forecasting. 
+**scChronos** is a hierarchical temporal context learning framework for missing single-cell snapshot prediction in single-cell time series.
 
 ------
 
 ## Key Innovations
 
-- **Reference-Conditioned Temporal Modeling**
-- **Target-Specific Reference Attention**
-- **Local-Global Fusion Decoder** 
+- **Cluster-representative cell transcriptomic encoding**
+- **Cluster-representative-cell-to-snapshot temporal aggregation**
+- **Dual-branch snapshot context fusion** 
 
 ------
 
@@ -64,34 +64,22 @@ CUDA_VISIBLE_DEVICES=0 python scripts/train_scchronos.py \
   --wandb
 ```
 
-The Schiebinger2019 recovery configuration follows the main best-performing
-scChronos setting used in the paper experiments: temporal foundation encoder,
-prototype-based reference context, target-specific reference attention,
-local-global residual fusion, target OT loss, prototype snapshot-level
-reconstruction, and masked cell-level reconstruction.
-
 Expected data layout:
 
 ```
 Data/
-├── pretrained/
-│   ├── mouse/mouse_pretrain_checkpoint.pth
+├── vocab/
 │   ├── mouse/mouse_gene_vocab.json
-│   ├── human/human_pretrain_checkpoint.pth
 │   └── human/updated_gene_vocab.json
 ├── mouse/
 └── human/
-```
 
-The pretrained loader supports the original foundation checkpoint key names
-and the release model key names. Genes absent from the provided vocabulary are
-added during fine-tuning when `extend_vocab: true`.
+```
 
 
 ### Prediction
 
 ```
 CUDA_VISIBLE_DEVICES=0 python scripts/predict_scchronos.py \
-  --checkpoint "" \
   --output-dir ""
 ```
