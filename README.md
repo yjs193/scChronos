@@ -1,4 +1,4 @@
-# scChronos: Transformer-based modeling of temporal gene expression dynamics in single-cell transcriptomes
+# scChronos: Hierarchical Temporal Context Learning for Missing Snapshot Prediction in Single-Cell Time Series
 
 **scChronos** is a reference-conditioned Transformer framework for temporal single-cell transcriptome recovery and forecasting. 
 
@@ -61,7 +61,6 @@ pip install -r requirements.txt
 
 ```
 CUDA_VISIBLE_DEVICES=0 python scripts/train_scchronos.py \
-  --config configs/eced_kidney_recovery_hvg1000.yaml \
   --wandb
 ```
 
@@ -76,9 +75,9 @@ Expected data layout:
 ```
 Data/
 ├── pretrained/
-│   ├── mouse/mouse_pretrain_checkpoint-132.pth
+│   ├── mouse/mouse_pretrain_checkpoint.pth
 │   ├── mouse/mouse_gene_vocab.json
-│   ├── human/human_pretrain_checkpoint-99.pth
+│   ├── human/human_pretrain_checkpoint.pth
 │   └── human/updated_gene_vocab.json
 ├── mouse/
 └── human/
@@ -93,7 +92,6 @@ added during fine-tuning when `extend_vocab: true`.
 
 ```
 CUDA_VISIBLE_DEVICES=0 python scripts/predict_scchronos.py \
-  --config configs/schiebinger2019_recovery_hvg1000.yaml \
   --checkpoint "" \
   --output-dir ""
 ```
