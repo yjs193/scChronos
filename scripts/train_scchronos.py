@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scchronos.data import day_index, load_temporal_dataset, make_gene_tokens
 from scchronos.evaluate import evaluate_model
 from scchronos.foundation import load_pretrained_encoder
-from scchronos.losses import weighted_ot, weighted_snapshot_stat_loss
+from scchronos.losses import weighted_ot, weighted_snapshot_stat_target
 from scchronos.model import ScChronos, load_model_state_flexible
 from scchronos.train_utils import build_day_prototypes, build_vocab_to_column, pad_weighted_proto, sample_episode, save_json, seed_everything
 from scchronos.vocab import extend_vocab_with_genes, load_vocab
@@ -54,7 +54,6 @@ def init_decoder_bias(model: ScChronos, values: np.ndarray) -> None:
     with torch.no_grad():
         model.decoder[-1].bias.copy_(bias)
         model.cell_decoder[-1].bias.copy_(bias)
-        model.recon_decoder[-1].bias.copy_(bias)
 
 
 def run_eval(model, data, values, token_tensors, prototypes, cfg, rng, device, save_predictions=False):
@@ -129,10 +128,6 @@ def main() -> None:
         local_context_k=int(cfg.get("local_context_k", 2)),
         local_strategy=str(cfg.get("local_strategy", cfg.get("local_context_strategy", "nearest"))),
         local_gate_init=float(cfg.get("local_gate_init", 0.5)),
-        local_residual_scale=float(cfg.get("local_residual_scale", 1.0)),
-        local_residual_max=float(cfg.get("local_residual_max", 2.0)),
-        local_residual_interp_only=bool(cfg.get("local_residual_interp_only", False)),
-        local_residual_input=str(cfg.get("local_residual_input", "local")),
         encode_chunk_size=int(cfg.get("encode_chunk_size", 8)),
         mean_correction_max=float(cfg.get("mean_correction_max", 3.0)),
         distance_penalty=float(cfg.get("distance_penalty", 0.5)),
@@ -206,7 +201,7 @@ def main() -> None:
         recon_ref = None
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=device.type == "cuda"):
             for i, target_day in enumerate(batch["target_day"]):
-                pred, recon, _z, _day_hidden, _day_weights, _cell_weights, cell_latent = model(
+                pred, recon, _z, day_hidden, _day_weights, _cell_weights, cell_latent = model(
                     batch["context_idx"],
                     context_val_model,
                     batch["context_total"],
@@ -216,7 +211,7 @@ def main() -> None:
                 )
                 target_losses.append(weighted_ot(pred[0], batch["target_expr"][i], batch["target_weight"][i], float(cfg.get("sinkhorn_blur", 0.05))))
                 if recon_ref is None:
-                    recon_ref = recon
+                    recon_ref = day_hidden
             loss_target = torch.stack(target_losses).mean()
             recon_terms = []
             if float(cfg.get("recon_weight", 0.0)) != 0:
@@ -231,7 +226,12 @@ def main() -> None:
                         weight_np = np.full(expr_np.shape[0], 1.0 / expr_np.shape[0], dtype=np.float32)
                     expr_t = torch.from_numpy(expr_np).float().to(device)
                     weight_t = torch.from_numpy(weight_np).float().to(device)
-                    recon_terms.append(weighted_snapshot_stat_loss(recon_ref[0, j], expr_t, weight_t))
+                    target_mean, target_std = weighted_snapshot_stat_target(expr_t, weight_t)
+                    pred_mean, pred_std = model.predict_snapshot_stats(recon_ref[:, j])
+                    recon_terms.append(
+                        torch.nn.functional.mse_loss(pred_mean[0], target_mean) * pred_mean.shape[-1]
+                        + torch.nn.functional.mse_loss(pred_std[0], target_std) * pred_std.shape[-1]
+                    )
             loss_recon = torch.stack(recon_terms).mean() if recon_terms else loss_target * 0.0
             loss_cell_recon, cell_mask_fraction = model.reconstruct_masked_cells_from_latent(cell_latent, batch["context_idx"], batch["context_val"], vocab_to_column, pad_id, cell_mask)
             loss = (

@@ -65,6 +65,7 @@ pip install -r requirements.txt
 
 ```
 CUDA_VISIBLE_DEVICES=0 python scripts/train_scchronos.py \
+  --config configs/eced_kidney_forecasting_hvg1000.yaml \
   --wandb
 ```
 
@@ -85,5 +86,7 @@ Data/
 
 ```
 CUDA_VISIBLE_DEVICES=0 python scripts/predict_scchronos.py \
+  --config configs/eced_kidney_forecasting_hvg1000.yaml \
+  --checkpoint "" \
   --output-dir ""
 ```

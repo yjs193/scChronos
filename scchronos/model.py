@@ -24,10 +24,6 @@ class ScChronos(nn.Module):
         local_context_k: int = 2,
         local_strategy: str = "nearest",
         local_gate_init: float = 0.5,
-        local_residual_scale: float = 1.0,
-        local_residual_max: float = 2.0,
-        local_residual_interp_only: bool = False,
-        local_residual_input: str = "local",
         dropout: float = 0.05,
         encode_chunk_size: int = 8,
         mean_correction_max: float = 3.0,
@@ -50,10 +46,6 @@ class ScChronos(nn.Module):
         self.local_context_k = max(1, int(local_context_k))
         self.local_context_strategy = str(local_strategy)
         self.local_gate_init = float(local_gate_init)
-        self.local_residual_scale = float(local_residual_scale)
-        self.local_residual_max = float(local_residual_max)
-        self.local_residual_interp_only = bool(local_residual_interp_only)
-        self.local_residual_input = str(local_residual_input)
         self.mean_correction_max = float(mean_correction_max)
         self.distance_penalty = float(distance_penalty)
         self.output_activation = str(output_activation)
@@ -77,16 +69,12 @@ class ScChronos(nn.Module):
         self.memory_value = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim), nn.GELU())
         self.memory_fuse = nn.Sequential(nn.LayerNorm(hidden_dim * 3), nn.Linear(hidden_dim * 3, hidden_dim * 2), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden_dim * 2, hidden_dim), nn.GELU())
         self.decoder = nn.Sequential(nn.LayerNorm(hidden_dim * 2), nn.Linear(hidden_dim * 2, hidden_dim * 2), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden_dim * 2, n_genes))
-        local_in = hidden_dim * 3 if self.local_residual_input == "global_local" else hidden_dim * 2
-        self.local_residual_decoder = nn.Sequential(nn.LayerNorm(local_in), nn.Linear(local_in, hidden_dim * 2), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden_dim * 2, n_genes))
         self.cell_decoder = nn.Sequential(nn.LayerNorm(enc_dim), nn.Linear(enc_dim, hidden_dim), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden_dim, n_genes))
-        self.recon_decoder = nn.Sequential(nn.LayerNorm(hidden_dim * 2), nn.Linear(hidden_dim * 2, hidden_dim * 2), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden_dim * 2, n_genes))
+        self.snapshot_stat_head = nn.Sequential(nn.LayerNorm(hidden_dim), nn.Linear(hidden_dim, hidden_dim * 2), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden_dim * 2, n_genes * 2))
         self.mean_corrector = nn.Sequential(nn.LayerNorm(hidden_dim + time_dim), nn.Linear(hidden_dim + time_dim, hidden_dim), nn.GELU(), nn.Dropout(dropout), nn.Linear(hidden_dim, n_genes))
-        for module, bias in [(self.decoder, -4.0), (self.cell_decoder, -4.0), (self.recon_decoder, -4.0)]:
+        for module, bias in [(self.decoder, -4.0), (self.cell_decoder, -4.0)]:
             nn.init.zeros_(module[-1].weight)
             nn.init.constant_(module[-1].bias, bias)
-        nn.init.zeros_(self.local_residual_decoder[-1].weight)
-        nn.init.zeros_(self.local_residual_decoder[-1].bias)
         nn.init.zeros_(self.mean_corrector[-1].weight)
         nn.init.zeros_(self.mean_corrector[-1].bias)
         nn.init.zeros_(self.local_global_gate[-1].weight)
@@ -190,10 +178,12 @@ class ScChronos(nn.Module):
 
     def target_representation_fused(self, day_hidden, day_slots, cell_hidden, context_days, target_day):
         z_global, weights_global = self.target_representation(day_hidden, day_slots, cell_hidden, context_days, target_day)
-        if self.fusion_mode != "local_global_gate" or context_days.shape[1] <= 1:
+        if self.fusion_mode not in {"local_global_gate", "local_global_sum"} or context_days.shape[1] <= 1:
             return z_global, weights_global
         local_mask = self.local_context_mask(context_days, target_day)
         z_local, weights_local = self.target_representation(day_hidden, day_slots, cell_hidden, context_days, target_day, day_mask=local_mask)
+        if self.fusion_mode == "local_global_sum":
+            return z_global + z_local, weights_global
         gate = torch.sigmoid(self.local_global_gate(torch.cat([z_global, z_local, time_features(target_day, target_day)], dim=-1)))
         return (1.0 - gate) * z_global + gate * z_local, (1.0 - gate) * weights_global + gate * weights_local
 
@@ -214,18 +204,10 @@ class ScChronos(nn.Module):
         z_expand = z[:, None, :].expand(-1, self.pred_cells, -1)
         return self.activate_output(decoder(torch.cat([z_expand, query], dim=-1)))
 
-    def decode_cells_with_local_residual(self, z_global, z_local, residual_active=None):
-        query = self.expanded_cell_queries(z_global.shape[0])
-        global_pred = self.decode_cells(z_global, self.decoder)
-        if self.local_residual_input == "global_local":
-            residual_input = torch.cat([z_global[:, None, :].expand(-1, self.pred_cells, -1), z_local[:, None, :].expand(-1, self.pred_cells, -1), query], dim=-1)
-        else:
-            residual_input = torch.cat([z_local[:, None, :].expand(-1, self.pred_cells, -1), query], dim=-1)
-        residual = self.local_residual_decoder(residual_input)
-        residual = max(float(self.local_residual_max), 1e-6) * torch.tanh(residual / max(float(self.local_residual_max), 1e-6))
-        if residual_active is not None:
-            residual = residual * residual_active.to(device=residual.device, dtype=residual.dtype)[:, None, None]
-        return (global_pred + float(self.local_residual_scale) * residual).clamp_min(0.0)
+    def predict_snapshot_stats(self, day_hidden):
+        out = self.snapshot_stat_head(day_hidden)
+        mean, raw_std = out.chunk(2, dim=-1)
+        return self.activate_output(mean), F.softplus(raw_std)
 
     def decode_cells_from_memory(self, z, cell_hidden, context_days, target_day, decoder):
         bsz, n_days, n_cells, _ = cell_hidden.shape
@@ -254,33 +236,13 @@ class ScChronos(nn.Module):
 
     def forward(self, idx, val, total, context_days, target_day, mean_correction_scale: float = 0.0, return_raw: bool = False):
         day_hidden, day_slots, cell_hidden, cell_weights, cell_latent = self.aggregate_days(idx, val, total, context_days, target_day)
-        if self.fusion_mode in {"local_global_residual", "local_when_interp"} and context_days.shape[1] > 1 and self.decoder_mode == "global_query":
-            z, day_weights = self.target_representation(day_hidden, day_slots, cell_hidden, context_days, target_day)
-            local_mask = self.local_context_mask(context_days, target_day)
-            z_local, _ = self.target_representation(day_hidden, day_slots, cell_hidden, context_days, target_day, day_mask=local_mask)
-            interp = (context_days < target_day[:, None]).any(dim=1) & (context_days > target_day[:, None]).any(dim=1)
-            residual_active = interp if self.local_residual_interp_only else None
-            pred_fused = self.decode_cells_with_local_residual(z, z_local, residual_active)
-            if self.fusion_mode == "local_when_interp":
-                pred_local = self.decode_cells(z_local, self.decoder)
-                selector = interp.to(device=pred_fused.device, dtype=pred_fused.dtype)[:, None, None]
-                pred_raw = selector * pred_local + (1.0 - selector) * pred_fused
-                z = selector.squeeze(-1) * z_local + (1.0 - selector.squeeze(-1)) * z
-            else:
-                pred_raw = pred_fused
+        z, day_weights = self.target_representation_fused(day_hidden, day_slots, cell_hidden, context_days, target_day)
+        if self.decoder_mode == "cell_memory":
+            pred_raw = self.decode_cells_from_memory(z, cell_hidden, context_days, target_day, self.decoder)
         else:
-            z, day_weights = self.target_representation_fused(day_hidden, day_slots, cell_hidden, context_days, target_day)
-            if self.decoder_mode == "cell_memory":
-                pred_raw = self.decode_cells_from_memory(z, cell_hidden, context_days, target_day, self.decoder)
-            else:
-                pred_raw = self.decode_cells(z, self.decoder)
+            pred_raw = self.decode_cells(z, self.decoder)
         pred, mean_correction = self.apply_mean_correction(pred_raw, z, target_day, mean_correction_scale)
-        recon = []
-        for i in range(day_hidden.shape[1]):
-            query = self.target_query(time_features(context_days[:, i], context_days[:, i]))
-            rz = self.target_fuse(torch.cat([day_hidden[:, i], query], dim=-1))
-            recon.append(self.decode_cells(rz, self.recon_decoder))
-        recon_stack = torch.stack(recon, dim=1)
+        recon_stack = None
         if return_raw:
             return pred, recon_stack, z, day_hidden, day_weights, cell_weights, cell_latent, pred_raw, mean_correction
         return pred, recon_stack, z, day_hidden, day_weights, cell_weights, cell_latent
@@ -310,8 +272,6 @@ def load_model_state_flexible(model: nn.Module, state: dict, strict: bool = Fals
         target = model.state_dict().get("cell_queries")
         if target is not None and source.ndim == 2 and target.ndim == 3:
             state["cell_queries"] = source.unsqueeze(0)
-    if "local_residual.weight" in state and "local_residual_decoder.0.weight" not in state:
-        pass
     if "query_group_embed" not in state and hasattr(model, "query_group_embed"):
         state["query_group_embed"] = torch.zeros_like(model.query_group_embed)
     return model.load_state_dict(state, strict=strict)
