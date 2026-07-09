@@ -20,7 +20,6 @@
 
 ```
 scChronos/
-├── configs/
 ├── scchronos/
 │   ├── __init__.py
 │   ├── data.py
