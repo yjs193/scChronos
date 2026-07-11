@@ -3,8 +3,7 @@
 **scChronos** is a hierarchical temporal context learning framework for missing single-cell snapshot prediction in single-cell time series.
 
 
-![scChronos overview](scchronos/overview.png)
-
+<!-- ![scChronos overview](scchronos/overview.png) -->
 
 ------
 
